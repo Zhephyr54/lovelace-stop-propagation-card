@@ -1,18 +1,31 @@
+const ACTION_MATCH_WINDOW_MS = 5000;
+
 class StopPropagationCard extends HTMLElement {
   setConfig(config) {
     if (!config || !config.card) {
       throw new Error(
-        "Stop Propagation Card requires a 'card' object in config."
+        "Stop Propagation Card requires a 'card' object in config.",
       );
     }
 
     this._config = config;
+    this._actions = config.actions || null;
+    this._lastAction = null;
+    this._lastActionTime = 0;
 
     if (!this.shadowRoot) {
       this.attachShadow({ mode: "open" });
-      ["click", "touchstart", "touchend", "pointerup"].forEach((type) => {
-        this.addEventListener(type, this._onClick);
-      });
+
+      if (!this._actions) {
+        ["click", "touchstart", "touchend", "pointerup"].forEach((type) => {
+          this.addEventListener(type, this._onBlockAll);
+        });
+      } else {
+        this.addEventListener("action", this._onAction);
+        ["click", "touchend", "pointerup"].forEach((type) => {
+          this.addEventListener(type, this._onSelectiveNativeEvent);
+        });
+      }
     }
 
     this._renderCard();
@@ -25,11 +38,46 @@ class StopPropagationCard extends HTMLElement {
     }
   }
 
-  _onClick(ev) {
+  _onBlockAll = (ev) => {
     ev.stopPropagation();
     if (ev.detail && ev.detail.sourceEvent) {
       ev.detail.sourceEvent.stopPropagation();
     }
+  };
+
+  _onAction = (ev) => {
+    const action = ev.detail && ev.detail.action;
+    if (!action) {
+      return;
+    }
+    this._lastAction = action;
+    this._lastActionTime = Date.now();
+
+    if (this._shouldBlock(action)) {
+      // Stop ancestors from seeing this semantic action too (e.g. a
+      // parent card that binds its own tap_action/hold_action via the
+      // same action-handler mechanism).
+      ev.stopPropagation();
+    }
+  };
+
+  _onSelectiveNativeEvent = (ev) => {
+    const withinWindow =
+      this._lastAction &&
+      Date.now() - this._lastActionTime <= ACTION_MATCH_WINDOW_MS;
+
+    if (withinWindow && this._shouldBlock(this._lastAction)) {
+      ev.stopPropagation();
+      if (ev.detail && ev.detail.sourceEvent) {
+        ev.detail.sourceEvent.stopPropagation();
+      }
+    }
+
+    this._lastAction = null;
+  };
+
+  _shouldBlock(action) {
+    return this._actions[`${action}_action`] === true;
   }
 
   _renderCard() {
@@ -37,11 +85,12 @@ class StopPropagationCard extends HTMLElement {
       this.shadowRoot.removeChild(this.shadowRoot.firstChild);
     }
 
+    const flex = this._config.grow ? "1 1 0%" : "0 0 auto";
     const style = document.createElement("style");
     style.textContent = `
       :host {
         display: block;
-        flex: 0 0 auto !important;
+        flex: ${flex} !important;
       }
     `;
     this.shadowRoot.appendChild(style);
@@ -99,5 +148,6 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: "stop-propagation-card",
   name: "stop-propagation-card",
-  description: "A card that stops event propagation.",
+  description:
+    "A card that stops event propagation, optionally selective per action type via the `actions` config option.",
 });
